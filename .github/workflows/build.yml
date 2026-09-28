@@ -1,11 +1,8 @@
 name: Build WDA (iOS 16 compatible)
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
-    inputs:
-      min_ios:
-        description: "Minimum supported iOS version"
-        required: false
-        default: "12.0"
 jobs:
   build:
     runs-on: macos-14
@@ -29,7 +26,7 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
-            IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.min_ios || '12.0' }}
+            IPHONEOS_DEPLOYMENT_TARGET=12.0
       - name: Package ipa and tipa
         run: |
           APP=$(find WebDriverAgent/build -path "*Release-iphoneos*" -name "*.app" | head -1)
