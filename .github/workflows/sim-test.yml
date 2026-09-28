@@ -1,4 +1,4 @@
-name: WDA Simulator Test (iOS 16)
+name: WDA Simulator Test
 on:
   push:
     branches: [ main ]
@@ -8,33 +8,25 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 45
     steps:
-      - name: List available simulators and runtimes
+      - name: Show available runtimes
+        run: xcrun simctl list runtimes
+      - name: Create and boot simulator
         run: |
-          echo "===== 可用 iOS 运行时 ====="
-          xcrun simctl list runtimes
-          echo "===== 可用设备类型 ====="
-          xcrun simctl list devicetypes | head -20
-      - name: Create iOS 16 simulator
-        run: |
-          RT=$(xcrun simctl list runtimes | grep -i "iOS 16" | head -1 | sed -E "s/.*(com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+).*/\1/")
-          echo "选中运行时: $RT"
-          if [ -z "$RT" ]; then
-            echo "⚠️ 没有 iOS 16 运行时，使用最新可用版本"
-            RT=$(xcrun simctl list runtimes | grep -i "iOS" | tail -1 | sed -E "s/.*(com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+).*/\1/")
-          fi
-          echo "最终运行时: $RT"
-          UDID=$(xcrun simctl create "WDA-Test-iOS16" "iPhone 14" "$RT")
+          RT=$(xcrun simctl list runtimes | grep -i "iOS" | tail -1 | sed -E "s/.*(com\\.apple\\.CoreSimulator\\.SimRuntime\\.iOS-[0-9-]+).*/\\1/")
+          echo "使用运行时: $RT"
+          UDID=$(xcrun simctl create "WDA-Test" "iPhone 14" "$RT")
           echo "UDID=$UDID" >> $GITHUB_ENV
-          echo "创建的模拟器: $UDID"
-          xcrun simctl boot "$UDID" || true
-          sleep 20
-          xcrun simctl list devices | grep -i booted
-      - name: Clone and build WDA
+          xcrun simctl boot "$UDID"
+          sleep 25
+          xcrun simctl list devices | grep Booted
+      - name: Clone WDA
         run: |
           git clone --depth 1 https://github.com/appium/WebDriverAgent.git
           cd WebDriverAgent
           git submodule update --init --recursive
-          echo "===== 开始编译 ====="
+      - name: Build for testing
+        run: |
+          cd WebDriverAgent
           xcodebuild build-for-testing \
             -project WebDriverAgent.xcodeproj \
             -scheme WebDriverAgentRunner \
@@ -42,43 +34,29 @@ jobs:
             -destination "id=$UDID" \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            IPHONEOS_DEPLOYMENT_TARGET=12.0 2>&1 | tail -30
-      - name: Install and launch WDA on simulator
+            IPHONEOS_DEPLOYMENT_TARGET=12.0 2>&1 | tail -25
+      - name: Find and install app
         run: |
-          APP=$(find WebDriverAgent/build -path "*Debug-iphonesimulator*" -name "WebDriverAgentRunner-Runner.app" | head -1)
-          echo "找到 App: $APP"
-          if [ -z "$APP" ]; then
-            echo "❌ 没找到编译产物"
-            find WebDriverAgent/build -name "*.app" | head
-            exit 1
-          fi
-          echo "===== 安装到模拟器 ====="
+          APP=$(find WebDriverAgent/build -name "WebDriverAgentRunner-Runner.app" -type d | head -1)
+          echo "App 路径: $APP"
+          if [ -z "$APP" ]; then echo "❌ 未找到产物"; find WebDriverAgent/build -name "*.app" | head; exit 1; fi
           xcrun simctl install "$UDID" "$APP" && echo "✅ 安装成功"
+      - name: Launch and verify
+        run: |
           echo "===== 启动 WDA ====="
-          xcrun simctl launch --console-pty "$UDID" com.facebook.WebDriverAgentRunner 2>&1 | head -40 &
-          LAUNCH_PID=$!
-          sleep 30
-          echo "===== 检查进程是否还活着 ====="
-          if xcrun simctl spawn "$UDID" launchctl list 2>/dev/null | grep -i webdriver; then
-            echo "✅✅✅ WDA 进程存活，未闪退！"
-          else
-            echo "⚠️ 进程列表里没找到，检查日志"
-          fi
-          echo "===== 模拟器崩溃日志 ====="
-          find ~/Library/Logs/DiagnosticReports -name "*WebDriver*" -mmin -10 2>/dev/null | head -5
-          for f in $(find ~/Library/Logs/DiagnosticReports -name "*WebDriver*" -mmin -10 2>/dev/null | head -2); do
-            echo "--- 崩溃日志: $f ---"
-            head -60 "$f"
-          done
-          echo "===== 系统日志中的 WDA 相关 ====="
-          xcrun simctl spawn "$UDID" log show --last 2m --predicate "process CONTAINS WebDriver" 2>/dev/null | tail -50 || true
-          kill $LAUNCH_PID 2>/dev/null || true
-      - name: Upload test logs
+          timeout 40 xcrun simctl launch --console "$UDID" com.facebook.WebDriverAgentRunner 2>&1 | head -50 || true
+          echo "===== 检查进程 ====="
+          xcrun simctl spawn "$UDID" launchctl list 2>/dev/null | grep -i webdriver && echo "✅✅ WDA 进程存活" || echo "⚠️ 进程未找到"
+          echo "===== 尝试访问 WDA 端口 ====="
+          xcrun simctl spawn "$UDID" curl -s http://localhost:8100/status 2>/dev/null | head -5 || echo "（模拟器内无法直接 curl，正常）"
+      - name: Collect crash logs
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: simulator-test-logs
-          path: |
-            ~/Library/Logs/DiagnosticReports/*WebDriver*
-          if-no-files-found: ignore
+        run: |
+          echo "===== 崩溃日志 ====="
+          find ~/Library/Logs/DiagnosticReports -name "*WebDriver*" 2>/dev/null | head -5
+          for f in $(find ~/Library/Logs/DiagnosticReports -name "*WebDriver*" 2>/dev/null | head -2); do
+            echo "--- $f ---"
+            head -80 "$f"
+          done
+          echo "===== 系统日志 ====="
+          xcrun simctl spawn "$UDID" log show --last 3m 2>/dev/null | grep -i webdriver | tail -40 || true
