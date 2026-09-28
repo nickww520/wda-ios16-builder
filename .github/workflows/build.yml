@@ -1,0 +1,48 @@
+name: Build WDA (iOS 16 compatible)
+on:
+  workflow_dispatch:
+    inputs:
+      min_ios:
+        description: "Minimum supported iOS version"
+        required: false
+        default: "12.0"
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - name: Pull the WebDriverAgent source code
+        run: |
+          git clone --depth 1 https://github.com/appium/WebDriverAgent.git
+          cd WebDriverAgent
+          git submodule update --init --recursive
+      - name: Show Xcode version
+        run: xcodebuild -version
+      - name: Build for generic iOS device (unsigned)
+        run: |
+          cd WebDriverAgent
+          xcodebuild build \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.min_ios || '12.0' }}
+      - name: Package ipa and tipa
+        run: |
+          APP=$(find WebDriverAgent/build -path "*Release-iphoneos*" -name "*.app" | head -1)
+          echo "Found app: $APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry WebDriverAgent.ipa Payload
+          cp WebDriverAgent.ipa WebDriverAgent.tipa
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebDriverAgent-ipa
+          path: |
+            WebDriverAgent.ipa
+            WebDriverAgent.tipa
+          if-no-files-found: error
