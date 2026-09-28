@@ -5,16 +5,12 @@ on:
   workflow_dispatch:
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: macos-14
     timeout-minutes: 40
     steps:
-      - name: Select Xcode 14.3
-        run: |
-          sudo xcode-select -s /Applications/Xcode_14.3.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_14.2.app/Contents/Developer || true
-          xcodebuild -version
       - name: Pull the WebDriverAgent source code
         run: |
-          git clone --depth 1 --branch v4.10.0 https://github.com/appium/WebDriverAgent.git || git clone --depth 1 https://github.com/appium/WebDriverAgent.git
+          git clone --depth 1 https://github.com/appium/WebDriverAgent.git
           cd WebDriverAgent
           git submodule update --init --recursive
       - name: Build for generic iOS device (unsigned, no dSYM)
@@ -30,10 +26,43 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEBUG_INFORMATION_FORMAT=dwarf \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
+      - name: Bundle XCTest frameworks (required to launch standalone)
+        run: |
+          APP=$(find WebDriverAgent/build -path "*Release-iphoneos*" -name "*.app" | head -1)
+          echo "App: $APP"
+          FW_DIR="$APP/Frameworks"
+          mkdir -p "$FW_DIR"
+          DEV="/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/Library/Frameworks"
+          cp -R "$DEV/XCTest.framework" "$FW_DIR/" || echo "XCTest copy failed"
+          cp -R "$DEV/XCUnit.framework" "$FW_DIR/" || echo "XCUnit copy failed"
+          ls -la "$FW_DIR/" || true
+      - name: Fake-sign with ldid + entitlements
+        run: |
+          brew install ldid || true
+          cat > ent.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>get-task-allow</key><true/>
+            <key>platform-application</key><true/>
+            <key>com.apple.private.security.no-container</key><true/>
+            <key>com.apple.private.skip-library-validation</key><true/>
+            <key>com.apple.backboardd.launchapplications</key><true/>
+            <key>com.apple.backboardd.debugapplications</key><true/>
+            <key>com.apple.frontboard.launchapplications</key><true/>
+            <key>com.apple.frontboard.debugapplications</key><true/>
+            <key>com.apple.springboard.launchapplications</key><true/>
+            <key>com.apple.private.memorystatus</key><true/>
+          </dict></plist>
+          EOF
+          APP=$(find WebDriverAgent/build -path "*Release-iphoneos*" -name "*.app" | head -1)
+          find "$APP" -type f \( -name "WebDriverAgentRunner*" -o -name "WebDriverAgentLib" \) -print0 | while IFS= read -r -d "" f; do
+            file "$f" | grep -q Mach-O && ldid -Sent.plist "$f" && echo "signed: $f"
+          done
+          ldid -Sent.plist "$APP/WebDriverAgentRunner-Runner" || true
       - name: Package ipa (strip dSYM)
         run: |
           APP=$(find WebDriverAgent/build -path "*Release-iphoneos*" -name "*.app" | head -1)
-          echo "Found app: $APP"
           find "$APP" -name "*.dSYM" -type d -exec rm -rf {} + || true
           find "$APP" -name "*.dSYM" -type f -delete || true
           mkdir -p Payload
