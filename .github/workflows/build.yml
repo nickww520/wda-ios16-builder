@@ -5,12 +5,16 @@ on:
   workflow_dispatch:
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-13
     timeout-minutes: 40
     steps:
+      - name: Select Xcode 14.3
+        run: |
+          sudo xcode-select -s /Applications/Xcode_14.3.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_14.2.app/Contents/Developer || true
+          xcodebuild -version
       - name: Pull the WebDriverAgent source code
         run: |
-          git clone --depth 1 https://github.com/appium/WebDriverAgent.git
+          git clone --depth 1 --branch v4.10.0 https://github.com/appium/WebDriverAgent.git || git clone --depth 1 https://github.com/appium/WebDriverAgent.git
           cd WebDriverAgent
           git submodule update --init --recursive
       - name: Build for generic iOS device (unsigned, no dSYM)
