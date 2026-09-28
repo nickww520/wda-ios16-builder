@@ -13,9 +13,7 @@ jobs:
           git clone --depth 1 https://github.com/appium/WebDriverAgent.git
           cd WebDriverAgent
           git submodule update --init --recursive
-      - name: Show Xcode version
-        run: xcodebuild -version
-      - name: Build for generic iOS device (unsigned)
+      - name: Build for generic iOS device (unsigned, no dSYM)
         run: |
           cd WebDriverAgent
           xcodebuild build \
@@ -26,11 +24,14 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
+            DEBUG_INFORMATION_FORMAT=dwarf \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
-      - name: Package ipa and tipa
+      - name: Package ipa (strip dSYM)
         run: |
           APP=$(find WebDriverAgent/build -path "*Release-iphoneos*" -name "*.app" | head -1)
           echo "Found app: $APP"
+          find "$APP" -name "*.dSYM" -type d -exec rm -rf {} + || true
+          find "$APP" -name "*.dSYM" -type f -delete || true
           mkdir -p Payload
           cp -R "$APP" Payload/
           zip -qry WebDriverAgent.ipa Payload
